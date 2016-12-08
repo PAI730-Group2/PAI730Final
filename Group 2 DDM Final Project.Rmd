@@ -1,0 +1,233 @@
+---
+title: "Group 2 Final Project: Citi Bike Dashboard"
+output: 
+  flexdashboard::flex_dashboard:
+    orientation: columns
+    vertical_layout: fill
+    theme: cerulean
+runtime: shiny
+---
+
+```{r setup, include=FALSE}
+library( flexdashboard )
+library( shiny )
+library( DT )
+library( dplyr )
+library( tidyr )
+library( pander ) # Added pander #
+library( ggplot2 )
+library( leaflet ) # Added leaflet #
+
+dat <- readRDS( gzcon( 
+  url("https://github.com/PAI730-Group2/PAI730Final/blob/master/NYC%20Bike%20Share%20Data.rds?raw=true")))
+
+dat <- tbl_df( dat )
+
+dat <- separate( dat, "starttime", c("s.date", "s.time"), sep="\\s", remove=F )
+
+dat <- separate( dat, "stoptime", c("e.date", "e.time"), sep="\\s", remove=F )
+
+dat <- separate( dat, "s.time", c("s.hour", "s.min"), sep=":", remove=F )
+
+dat <- mutate( dat, s.hour=as.numeric( s.hour ) )
+
+nice.labels <- c("GI Generation(89+)", "Mature Generation(70-88)", "Baby Boomers(51-69)", "Generation X(35-50)", "Generation Y(16-34)", "Generation Z")
+
+dat <- mutate (dat, generations=cut (birth.year, breaks=c(1898,1926,1945,1964,1980, 2000,2015), labels=nice.labels))
+
+dat1 <- mutate( dat, stationcombo = paste( start.station.id, end.station.id ) )
+
+dat.med <- dat1 %>% 
+            group_by( stationcombo, start.station.name, start.station.id, start.station.latitude, 
+            start.station.longitude, end.station.name, end.station.id, end.station.latitude,
+            end.station.longitude ) %>%
+            summarise( med_trip = round( median( tripduration )/60, 0 ) )
+
+dat.years <- filter( dat, birth.year >= 0 )
+
+dat.years <- mutate( dat.years, s.hour=as.numeric(s.hour) )
+
+group.gen <- group_by( dat.years, generations, s.hour )
+
+max.gen <- group.gen %>% count (generations, s.hour) %>% filter (n == max(n))
+
+val.by.gen <- summarise( group.gen, Frequency = length(s.hour) )
+
+```
+
+Descriptive Statistics
+=======================================================================
+
+Inputs {.sidebar}
+-----------------------------------------------------------------------
+
+Bike Usage by Generation:
+
+```{r}
+# Set Generation List for Input
+
+Gen <- c("GI Generation(89+)", "Mature Generation(70-88)", "Baby Boomers(51-69)", "Generation X(35-50)", "Generation Y(16-34)")
+
+# Create Colors for Generations
+
+Gen.color <- c( "red4", "goldenrod1", "forestgreen", "navy", "darkorange") 
+
+dat.gen <- data.frame( Gen=Gen, Color=Gen.color )
+
+# Create Checkbox Group Widget
+
+checkboxGroupInput( "gen", 'Select Generation(s)', choices=Gen,
+                    selected="GI Generation(89+)"
+                    )
+
+```
+
+Column {data-width=600}
+-----------------------------------------------------------------------
+
+### Bike Usage by Generation
+
+```{r}
+
+renderPlot({
+  
+  p1 <- ggplot( subset(dat.years, generations==input$gen), aes( x=s.hour ) ) + 
+    geom_density( aes( group=generations, colour=generations, fill=generations),
+                  alpha=0.3) +
+    scale_x_continuous(name="Start Hour", limits=c(0,23), breaks=seq(0,23,2) ) +
+    theme( text=element_text( size=13 ) ) +
+    theme( axis.text=element_text( size=13 ) ) +
+    theme( legend.text=element_text( size=13 ) )
+  
+  p1
+
+})
+
+
+```
+
+Column {data-width=400}
+-----------------------------------------------------------------------
+### Number of Bike Trips by Time of Day (monthly count)
+
+```{r}
+
+plot( table( dat$s.hour), bty="n", yaxt="n", xlab="Time of Day (Hour)", ylab="", main="Number of Bike Trips by Time of Day", col= "black", cex=5, lwd=2)
+segments(x0=17, y=0, x1=17, y1=28028, col="firebrick1", cex=5, lwd = 3)
+text(x=17, y=28628, "28028")
+segments(x0=8, y=0, x1=8, y1=25109, col="firebrick1", cex=5, lwd = 3)
+text(x=8, y=25700, "25109")
+segments(x0=18, y=0, x1=18, y1=26426, col="firebrick1", cex=5, lwd = 3)
+text(x=18.5, y=27026, "26426")
+
+```
+
+
+### Top Ten Most Used Bikes
+
+```{r}
+
+group.bike <- group_by (dat, bikeid)
+
+ten.bikes <- summarize (group.bike, TotalRides= n(), TotalTime= max(tripduration))
+
+ten.bikes <- arrange (ten.bikes, desc(TotalTime))
+
+ten.bikes.df <- as.data.frame( head( ten.bikes, n=10L ) )
+
+ten.bikes.df <- arrange( ten.bikes.df, desc(TotalRides) )
+
+DT:: renderDataTable({
+  datatable(ten.bikes.df) 
+})
+
+``` 
+
+
+Map
+=======================================================================
+
+Inputs {.sidebar}
+-----------------------------------------------------------------------
+
+```{r}
+
+# Input Panel
+
+start.station = unique( dat$start.station.name )
+
+end.station = unique( dat$end.station.name )
+
+selectInput(
+            'start','Select Start Station', choices=start.station
+            )
+
+sliderInput("minutes", label = "Maximum Number of Minutes", min = 0, 
+        max = 100, value = 5)
+
+startIcon <- endIcon <- makeIcon(iconUrl = "http://www.clipartkid.com/images/390/big-image-png-6IW2jS-clipart.png",
+iconWidth = 38, iconHeight = 50,
+iconAnchorX = 22, iconAnchorY = 49
+)
+
+endIcon <- makeIcon(iconUrl = "http://icons.iconarchive.com/icons/paomedia/small-n-flat/1024/map-marker-icon.png",
+iconWidth = 38, iconHeight = 38,
+iconAnchorX = 22, iconAnchorY = 37
+)
+
+```
+
+Column {data-height=100}
+----------------------------------------------------------------------------------
+
+```{r}
+# Select start station and max minutes
+
+# Display start station
+
+# Display end stations where median trip length =< max minutes
+
+output$map <- renderLeaflet({
+  
+ 
+  map <- leaflet( width="100%", height=200) %>%
+    addProviderTiles( "Stamen.Toner" ) %>%
+    
+    # Add markers for all stations reachable in given time
+    addMarkers( lng=dat.med$end.station.longitude[ dat.med$start.station.name == input$start &
+                                                     dat.med$med_trip <= input$minutes &
+                                                     dat.med$end.station.name != input$start],
+                lat=dat.med$end.station.latitude[ dat.med$start.station.name == input$start &
+                                                   dat.med$med_trip <= input$minutes &
+                                                   dat.med$end.station.name != input$start], 
+                icon=endIcon,
+                popup=dat.med$end.station.name[ dat.med$start.station.name == input$start &
+                                                 dat.med$med_trip <= input$minutes &
+                                                 dat.med$end.station.name != input$start ]) %>%
+    
+    # Add marker for start station
+    addMarkers(lng=dat.med$start.station.longitude[ dat.med$start.station.name == input$start], 
+                  lat=dat.med$start.station.latitude[dat.med$start.station.name == input$start],
+                  popup = input$start, icon=startIcon )
+    
+  
+})
+
+leafletOutput( 'map', width="100%", height=800 )
+
+
+```
+
+
+
+Data Table on Generational Use
+=======================================================================
+```{r}
+
+DT:: renderDataTable({
+  datatable(val.by.gen) 
+})
+
+```
+
+
